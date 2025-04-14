@@ -14,11 +14,17 @@ fn main() {
                 println!("accepted new connection");
                 let buf_reader = BufReader::new(&mut stream);
                 let request_line = buf_reader.lines().next().unwrap().unwrap();
-                let response = match request_line.as_str() {
-                    "GET / HTTP/1.1" => "HTTP/1.1 200 OK\r\n\r\n",
-                    _ => "HTTP/1.1 404 Not Found\r\n\r\n",
-                };
-                stream.write_all(response.as_bytes()).unwrap()
+                let path = request_line.split_whitespace().nth(1).unwrap();
+                let response_body: Vec<u8>;
+                match path {
+                    "/" => response_body = "HTTP/1.1 200 OK\r\n\r\n".as_bytes().to_vec(),
+                    path if path.starts_with("/echo/") => {
+                        let str = path.trim_start_matches("/echo/");
+                        response_body = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}", str.len(), str).into_bytes();
+                    }
+                    _ => response_body = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec(),
+                }
+                stream.write_all(response_body.as_slice()).unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);
