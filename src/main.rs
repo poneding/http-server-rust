@@ -45,7 +45,7 @@ fn handle_request(stream: &mut TcpStream) {
                 let dir = env::args().nth(2).unwrap();
                 if let Ok(file_content) = fs::read_to_string(Path::new(&dir).join(file_path)) {
                     response_body = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
                         file_content.len(),
                         file_content
                     )
