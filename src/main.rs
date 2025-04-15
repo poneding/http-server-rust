@@ -2,7 +2,7 @@
 use std::net::TcpListener;
 use std::{
     env, fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
     path::Path,
     thread, vec,
@@ -41,18 +41,7 @@ fn handle_request(stream: &mut TcpStream) {
                 .into_bytes();
             }
             path if path.starts_with("/files/") => {
-                let file_path = path.trim_start_matches("/files/");
-                let dir = env::args().nth(2).unwrap();
-                if let Ok(file_content) = fs::read_to_string(Path::new(&dir).join(file_path)) {
-                    response_body = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
-                        file_content.len(),
-                        file_content
-                    )
-                    .into_bytes();
-                } else {
-                    response_body = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
-                }
+                response_body = handle_create_file_request(&request);
             }
             "/user-agent" => {
                 let body;
@@ -81,6 +70,38 @@ fn handle_request(stream: &mut TcpStream) {
     stream.flush().unwrap();
 }
 
+fn handle_create_file_request(request: &Request) -> Vec<u8> {
+    let response: Vec<u8>;
+    let file_name = request.path.trim_start_matches("/files/");
+
+    let dir = env::args().nth(2).unwrap();
+    let file_path = Path::new(&dir).join(file_name);
+    match request.method.as_str() {
+        "POST" => {
+            fs::write(file_path, request.body.as_str()).unwrap();
+            response = "HTTP/1.1 201 Created\r\n\r\n".as_bytes().to_vec();
+        }
+        "GET" => {
+            if let Ok(file_content) = fs::read_to_string(file_path) {
+                response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+                        file_content.len(),
+                        file_content
+                    )
+                    .into_bytes();
+            } else {
+                response = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
+            }
+        }
+        _ => {
+            response = "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
+                .as_bytes()
+                .to_vec();
+        }
+    }
+
+    response
+}
 #[allow(dead_code)]
 struct Request {
     pub(crate) method: String,
@@ -92,49 +113,39 @@ struct Request {
 
 impl Request {
     fn from_tcp_stream(stream: &mut TcpStream) -> Option<Self> {
-        let buf_reader = BufReader::new(stream);
-        let mut lines = buf_reader.lines();
+        let mut buf_reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        buf_reader.read_line(&mut request_line).unwrap();
+        // let mut lines = buf_reader.lines();
 
-        let request_line = lines.next().unwrap().unwrap();
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap().to_string();
         let path = parts.next().unwrap().to_string();
         let version = parts.next().unwrap().to_string();
 
         let mut headers = Vec::new();
+        let mut content_length = 0;
         loop {
-            let line = lines.next().unwrap().unwrap();
-            if line.is_empty() {
-                // 遇到空行，表示请求头结束
+            let mut line = String::new();
+            buf_reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line == "\n" {
+                // 空行，表示请求头结束
                 break;
             }
-
-            let mut parts = line.split(": ");
-            let key = parts.next().unwrap().to_string();
-            let value: String = parts.next().unwrap().to_string();
-            headers.push((key, value));
+            let line = line.trim_end();
+            if let Some((key, value)) = line.split_once(": ") {
+                headers.push((key.to_string(), value.to_string()));
+                if key == "Content-Length" {
+                    content_length = value.parse::<usize>().unwrap();
+                }
+            }
         }
 
         let mut body = String::new();
-        if let Some(content_length) = headers
-            .iter()
-            .find(|&header| header.0 == String::from("Content-Length"))
-        {
-            let mut len = content_length.1.parse().unwrap();
-            if len > 0 {
-                let mut body_buf = vec![0; len];
-                loop {
-                    let line = lines.next().unwrap().unwrap();
-                    if len >= line.as_bytes().len() {
-                        body_buf.extend_from_slice(line.as_bytes());
-                        len -= line.as_bytes().len();
-                    } else {
-                        body_buf.extend_from_slice(&line.as_bytes()[..len]);
-                        break;
-                    }
-                }
-                body = String::from_utf8(body_buf).unwrap();
-            }
+        if content_length > 0 {
+            let mut body_buf = vec![0; content_length];
+            buf_reader.read_exact(&mut body_buf).unwrap();
+            body = String::from_utf8(body_buf).unwrap();
         }
 
         // TODO: 处理请求体
