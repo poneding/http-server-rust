@@ -27,22 +27,15 @@ fn main() {
 }
 
 fn handle_request(stream: &mut TcpStream) {
-    let response_body: Vec<u8>;
-    if let Some(request) = Request::from_tcp_stream(stream) {
-        match request.path.as_str() {
-            "/" => response_body = "HTTP/1.1 200 OK\r\n\r\n".as_bytes().to_vec(),
+    let response = match Request::from_tcp_stream(stream) {
+        Some(request) => match request.path.as_str() {
+            "/" => make_response(HTTPStatus::OK, None, &[]),
             path if path.starts_with("/echo/") => {
                 let body = path.trim_start_matches("/echo/");
-                response_body = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .into_bytes();
+
+                make_response(HTTPStatus::OK, Some("text/plain"), body.as_bytes())
             }
-            path if path.starts_with("/files/") => {
-                response_body = handle_create_file_request(&request);
-            }
+            path if path.starts_with("/files/") => handle_create_file_request(&request),
             "/user-agent" => {
                 let body;
                 if let Some(user_agent) = request
@@ -54,24 +47,20 @@ fn handle_request(stream: &mut TcpStream) {
                 } else {
                     body = String::new();
                 }
-                response_body = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .into_bytes();
+                make_response(HTTPStatus::OK, Some("text/plain"), body.as_bytes())
             }
-            _ => response_body = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec(),
+            _ => make_response(HTTPStatus::NotFound, None, &[]),
+        },
+        None => {
+            // 处理请求失败的情况
+            make_response(HTTPStatus::NotFound, None, &[])
         }
-    } else {
-        response_body = "HTTP/1.1 200 OK".as_bytes().to_vec();
-    }
-    stream.write_all(response_body.as_slice()).unwrap();
+    };
+    stream.write_all(response.as_slice()).unwrap();
     stream.flush().unwrap();
 }
 
 fn handle_create_file_request(request: &Request) -> Vec<u8> {
-    let response: Vec<u8>;
     let file_name = request.path.trim_start_matches("/files/");
 
     let dir = env::args().nth(2).unwrap();
@@ -79,29 +68,59 @@ fn handle_create_file_request(request: &Request) -> Vec<u8> {
     match request.method.as_str() {
         "POST" => {
             fs::write(file_path, request.body.as_str()).unwrap();
-            response = "HTTP/1.1 201 Created\r\n\r\n".as_bytes().to_vec();
+            make_response(HTTPStatus::Created, None, &[])
         }
         "GET" => {
             if let Ok(file_content) = fs::read_to_string(file_path) {
-                response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
-                        file_content.len(),
-                        file_content
-                    )
-                    .into_bytes();
+                make_response(
+                    HTTPStatus::OK,
+                    Some("application/octet-stream"),
+                    file_content.as_bytes(),
+                )
             } else {
-                response = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
+                make_response(HTTPStatus::NotFound, None, &[])
             }
         }
-        _ => {
-            response = "HTTP/1.1 405 Method Not Allowed\r\n\r\n"
-                .as_bytes()
-                .to_vec();
+        _ => make_response(HTTPStatus::MethodNotAllowed, None, &[]),
+    }
+}
+
+enum HTTPStatus {
+    OK,
+    Created,
+    NotFound,
+    MethodNotAllowed,
+}
+
+impl HTTPStatus {
+    fn to_string(&self) -> String {
+        match self {
+            HTTPStatus::OK => "200 OK".to_string(),
+            HTTPStatus::Created => "201 Created".to_string(),
+            HTTPStatus::NotFound => "404 Not Found".to_string(),
+            HTTPStatus::MethodNotAllowed => "405 Method Not Allowed".to_string(),
         }
     }
+}
+
+fn make_response(status: HTTPStatus, content_type: Option<&str>, body: &[u8]) -> Vec<u8> {
+    let headers = if let Some(content_type) = content_type {
+        format!(
+            "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
+            status.to_string(),
+            content_type,
+            body.len()
+        )
+    } else {
+        format!("HTTP/1.1 {}\r\n\r\n", status.to_string())
+    };
+
+    let mut response = headers.into_bytes();
+    response.extend_from_slice(body);
 
     response
 }
+
 #[allow(dead_code)]
 struct Request {
     pub(crate) method: String,
@@ -154,7 +173,7 @@ impl Request {
             path,
             version,
             headers,
-            body: body,
+            body,
         })
     }
 }
