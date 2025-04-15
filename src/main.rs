@@ -1,8 +1,10 @@
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
     net::TcpStream,
+    path::Path,
     thread, vec,
 };
 
@@ -38,6 +40,19 @@ fn handle_request(stream: &mut TcpStream) {
                 )
                 .into_bytes();
             }
+            path if path.starts_with("/files/") => {
+                let file_path = path.trim_start_matches("/files/");
+                if let Ok(file_content) = fs::read_to_string(Path::new("/tmp").join(file_path)) {
+                    response_body = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                        file_content.len(),
+                        file_content
+                    )
+                    .into_bytes();
+                } else {
+                    response_body = "HTTP/1.1 404 Not Found\r\n\r\n".as_bytes().to_vec();
+                }
+            }
             "/user-agent" => {
                 let body;
                 if let Some(user_agent) = request
@@ -64,6 +79,7 @@ fn handle_request(stream: &mut TcpStream) {
     stream.write_all(response_body.as_slice()).unwrap();
     stream.flush().unwrap();
 }
+
 #[allow(dead_code)]
 struct Request {
     pub(crate) method: String,
