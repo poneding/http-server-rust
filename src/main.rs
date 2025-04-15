@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use std::net::TcpListener;
 use std::{
-    fs,
+    env, fs,
     io::{BufRead, BufReader, Write},
     net::TcpStream,
     path::Path,
@@ -42,7 +42,8 @@ fn handle_request(stream: &mut TcpStream) {
             }
             path if path.starts_with("/files/") => {
                 let file_path = path.trim_start_matches("/files/");
-                if let Ok(file_content) = fs::read_to_string(Path::new("/tmp").join(file_path)) {
+                let dir = env::args().nth(2).unwrap();
+                if let Ok(file_content) = fs::read_to_string(Path::new(&dir).join(file_path)) {
                     response_body = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                         file_content.len(),
